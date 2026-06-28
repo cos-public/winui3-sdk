@@ -46,43 +46,6 @@ function New-CleanDirectory {
     New-Item -ItemType Directory -Force -Path $Path | Out-Null
 }
 
-function Copy-FirstRequiredFile {
-    param(
-        [Parameter(Mandatory = $true)][string]$Root,
-        [Parameter(Mandatory = $true)][string]$Filter,
-        [Parameter(Mandatory = $true)][string]$Destination
-    )
-
-    $file = Get-ChildItem -LiteralPath $Root -Recurse -File -Filter $Filter | Select-Object -First 1
-    if (!$file) {
-        throw "Required file '$Filter' was not found under '$Root'."
-    }
-
-    New-Item -ItemType Directory -Force -Path $Destination | Out-Null
-    Copy-Item -LiteralPath $file.FullName -Destination $Destination -Force
-    Write-Host "Copied $($file.FullName) -> $Destination"
-}
-
-function Copy-FirstRequiredFileFromRoots {
-    param(
-        [Parameter(Mandatory = $true)][string[]]$Roots,
-        [Parameter(Mandatory = $true)][string]$Filter,
-        [Parameter(Mandatory = $true)][string]$Destination
-    )
-
-    foreach ($root in $Roots) {
-        $file = Get-ChildItem -LiteralPath $root -Recurse -File -Filter $Filter | Select-Object -First 1
-        if ($file) {
-            New-Item -ItemType Directory -Force -Path $Destination | Out-Null
-            Copy-Item -LiteralPath $file.FullName -Destination $Destination -Force
-            Write-Host "Copied $($file.FullName) -> $Destination"
-            return
-        }
-    }
-
-    throw "Required file '$Filter' was not found under any Windows App SDK package root."
-}
-
 function Copy-ArchitectureFile {
     param(
         [Parameter(Mandatory = $true)]$File,
@@ -187,13 +150,11 @@ nuget install Microsoft.Windows.CppWinRT -Version $CppWinRTVersion -OutputDirect
 $windowsAppSdkRoot = Get-PackageRoot -PackagesRoot $packagesRoot -PackageId "Microsoft.WindowsAppSDK" -Version $WindowsAppSDKVersion
 $cppWinRTRoot = Get-PackageRoot -PackagesRoot $packagesRoot -PackageId "Microsoft.Windows.CppWinRT" -Version $CppWinRTVersion
 
-$windowsAppSdkPackageRoots = @(Get-ChildItem -LiteralPath $packagesRoot -Directory |
-    Where-Object { $_.Name -like "Microsoft.WindowsAppSDK*" } |
-    Sort-Object Name |
+$packageRoots = @(Get-ChildItem -LiteralPath $packagesRoot -Directory | Sort-Object Name)
+$windowsAppSdkPackageRoots = @($packageRoots | Where-Object { $_.Name -like "Microsoft.WindowsAppSDK*" } | ForEach-Object { $_.FullName })
+$metadataPackageRoots = @($packageRoots |
+    Where-Object { $_.Name -notlike "Microsoft.Windows.CppWinRT*" -and $_.Name -notlike "Microsoft.Windows.SDK.BuildTools*" } |
     ForEach-Object { $_.FullName })
-if ($windowsAppSdkPackageRoots -notcontains $windowsAppSdkRoot) {
-    $windowsAppSdkPackageRoots = @($windowsAppSdkRoot) + $windowsAppSdkPackageRoots
-}
 
 foreach ($root in $windowsAppSdkPackageRoots) {
     Write-Host "Windows App SDK package root: $root"
@@ -206,54 +167,22 @@ if (!$cppwinrt) {
 
 New-Item -ItemType Directory -Force -Path $includeRoot, $winmdOut, $cmakeOut | Out-Null
 
-Write-Host "Copying baseline C++/WinRT headers..."
-$cppWinRTIncludeDirs = @(Get-ChildItem -LiteralPath $cppWinRTRoot -Recurse -Directory |
-    Where-Object { Test-Path (Join-Path $_.FullName "winrt\base.h") })
-if ($cppWinRTIncludeDirs) {
-    Copy-Item -LiteralPath (Join-Path $cppWinRTIncludeDirs[0].FullName "winrt") -Destination $includeRoot -Recurse -Force
-}
-else {
-    Write-Warning "Could not find a packaged C++/WinRT include directory containing winrt/base.h. cppwinrt.exe is expected to generate the baseline headers."
-}
-
-Write-Host "Finding Windows App SDK metadata..."
-$winmdFiles = @($windowsAppSdkPackageRoots |
+Write-Host "Finding metadata..."
+$packageWinmdFiles = @($metadataPackageRoots |
     ForEach-Object { Get-ChildItem -LiteralPath $_ -Recurse -File -Filter *.winmd } |
     Where-Object { $_.FullName -notmatch '\\ref\\net' } |
     Sort-Object FullName -Unique)
-if (!$winmdFiles) {
-    throw "No .winmd files were found under any Windows App SDK package root."
+if (!$packageWinmdFiles) {
+    throw "No .winmd files were found under installed metadata package roots."
 }
-
-$dependencyWinmdFiles = @(Get-ChildItem -LiteralPath $packagesRoot -Directory |
-    Where-Object {
-        $_.Name -notlike "Microsoft.WindowsAppSDK*" -and
-        $_.Name -notlike "Microsoft.Windows.CppWinRT*" -and
-        $_.Name -notlike "Microsoft.Windows.SDK.BuildTools*"
-    } |
-    ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Recurse -File -Filter *.winmd } |
-    Where-Object { $_.FullName -notmatch '\\ref\\net' } |
-    Sort-Object FullName -Unique)
-
-$winmdDirs = @($winmdFiles |
-    ForEach-Object { $_.Directory.FullName } |
-    Sort-Object -Unique)
-
-$dependencyWinmdDirs = @($dependencyWinmdFiles |
-    ForEach-Object { $_.Directory.FullName } |
-    Sort-Object -Unique)
 
 $windowsSdkWinmdDirectories = @(Get-WindowsSdkWinmdDirectories -PackagesRoot $packagesRoot)
-if ($windowsSdkWinmdDirectories) {
-    foreach ($dir in $windowsSdkWinmdDirectories) {
-        Write-Host "Windows SDK metadata directory: $dir"
-    }
-    $winmdDirs = $windowsSdkWinmdDirectories + $dependencyWinmdDirs + $winmdDirs
-}
-else {
+if (!$windowsSdkWinmdDirectories) {
     Write-Warning "Windows SDK Windows.winmd was not found in Windows Kits or NuGet SDK build tools. cppwinrt.exe may fail if Windows metadata cannot be resolved implicitly."
-    $winmdDirs = $dependencyWinmdDirs + $winmdDirs
 }
+
+$winmdDirs = @($windowsSdkWinmdDirectories + @($packageWinmdFiles | ForEach-Object { $_.Directory.FullName }) |
+    Sort-Object -Unique)
 
 foreach ($dir in $winmdDirs) {
     Write-Host "WINMD input directory: $dir"
@@ -275,8 +204,18 @@ if (!(Test-Path (Join-Path $includeRoot "winrt\base.h"))) {
 }
 
 Write-Host "Copying Windows App SDK public headers..."
-Copy-FirstRequiredFileFromRoots -Roots $windowsAppSdkPackageRoots -Filter "MddBootstrap.h" -Destination $includeRoot
-Copy-FirstRequiredFileFromRoots -Roots $windowsAppSdkPackageRoots -Filter "WindowsAppSDK-VersionInfo.h" -Destination $includeRoot
+$requiredHeaders = @("MddBootstrap.h", "WindowsAppSDK-VersionInfo.h")
+foreach ($header in $requiredHeaders) {
+    $file = $windowsAppSdkPackageRoots |
+        ForEach-Object { Get-ChildItem -LiteralPath $_ -Recurse -File -Filter $header } |
+        Select-Object -First 1
+    if (!$file) {
+        throw "Required header '$header' was not found under any Windows App SDK package root."
+    }
+
+    Copy-Item -LiteralPath $file.FullName -Destination $includeRoot -Force
+    Write-Host "Copied $($file.FullName) -> $includeRoot"
+}
 
 $additionalHeaders = @(
     "MddBootstrapTest.h",
@@ -318,13 +257,7 @@ if ($IncludeRuntimeDlls) {
 
 Write-Host "Copying metadata..."
 $seenWinmdNames = @{}
-foreach ($winmd in $winmdFiles) {
-    if (!$seenWinmdNames.ContainsKey($winmd.Name)) {
-        Copy-Item -LiteralPath $winmd.FullName -Destination $winmdOut -Force
-        $seenWinmdNames[$winmd.Name] = $winmd.FullName
-    }
-}
-foreach ($winmd in $dependencyWinmdFiles) {
+foreach ($winmd in $packageWinmdFiles) {
     if (!$seenWinmdNames.ContainsKey($winmd.Name)) {
         Copy-Item -LiteralPath $winmd.FullName -Destination $winmdOut -Force
         $seenWinmdNames[$winmd.Name] = $winmd.FullName
