@@ -138,21 +138,29 @@ function Get-PackageRoot {
     return $package.FullName
 }
 
-function Get-WindowsSdkWinmdDirectory {
+function Get-WindowsSdkWinmdDirectories {
+    param([Parameter(Mandatory = $true)][string]$PackagesRoot)
+
+    $searchRoots = @()
     $kitsRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\UnionMetadata"
-    if (!(Test-Path $kitsRoot)) {
-        return $null
+    if (Test-Path $kitsRoot) {
+        $searchRoots += $kitsRoot
     }
 
-    $windowsWinmd = Get-ChildItem -LiteralPath $kitsRoot -Recurse -File -Filter "Windows.winmd" |
+    $windowsSdkBuildToolsRoots = @(Get-ChildItem -LiteralPath $PackagesRoot -Directory |
+        Where-Object { $_.Name -like "Microsoft.Windows.SDK.BuildTools*" } |
+        ForEach-Object { $_.FullName })
+    $searchRoots += $windowsSdkBuildToolsRoots
+
+    if (!$searchRoots) {
+        return @()
+    }
+
+    return @($searchRoots |
+        ForEach-Object { Get-ChildItem -LiteralPath $_ -Recurse -File -Filter "Windows.winmd" } |
         Sort-Object FullName -Descending |
-        Select-Object -First 1
-
-    if (!$windowsWinmd) {
-        return $null
-    }
-
-    return $windowsWinmd.Directory.FullName
+        ForEach-Object { $_.Directory.FullName } |
+        Sort-Object -Unique)
 }
 
 $packagesRoot = Join-Path $RepositoryRoot "packages"
@@ -221,13 +229,15 @@ $winmdDirs = @($winmdFiles |
     ForEach-Object { $_.Directory.FullName } |
     Sort-Object -Unique)
 
-$windowsSdkWinmdDirectory = Get-WindowsSdkWinmdDirectory
-if ($windowsSdkWinmdDirectory) {
-    Write-Host "Windows SDK metadata directory: $windowsSdkWinmdDirectory"
-    $winmdDirs = @($windowsSdkWinmdDirectory) + $winmdDirs
+$windowsSdkWinmdDirectories = @(Get-WindowsSdkWinmdDirectories -PackagesRoot $packagesRoot)
+if ($windowsSdkWinmdDirectories) {
+    foreach ($dir in $windowsSdkWinmdDirectories) {
+        Write-Host "Windows SDK metadata directory: $dir"
+    }
+    $winmdDirs = $windowsSdkWinmdDirectories + $winmdDirs
 }
 else {
-    Write-Warning "Windows SDK Windows.winmd was not found. cppwinrt.exe may fail if Windows metadata cannot be resolved implicitly."
+    Write-Warning "Windows SDK Windows.winmd was not found in Windows Kits or NuGet SDK build tools. cppwinrt.exe may fail if Windows metadata cannot be resolved implicitly."
 }
 
 foreach ($dir in $winmdDirs) {
