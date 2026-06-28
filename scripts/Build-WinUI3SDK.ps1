@@ -63,6 +63,26 @@ function Copy-FirstRequiredFile {
     Write-Host "Copied $($file.FullName) -> $Destination"
 }
 
+function Copy-FirstRequiredFileFromRoots {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Roots,
+        [Parameter(Mandatory = $true)][string]$Filter,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+
+    foreach ($root in $Roots) {
+        $file = Get-ChildItem -LiteralPath $root -Recurse -File -Filter $Filter | Select-Object -First 1
+        if ($file) {
+            New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+            Copy-Item -LiteralPath $file.FullName -Destination $Destination -Force
+            Write-Host "Copied $($file.FullName) -> $Destination"
+            return
+        }
+    }
+
+    throw "Required file '$Filter' was not found under any Windows App SDK package root."
+}
+
 function Copy-ArchitectureFile {
     param(
         [Parameter(Mandatory = $true)]$File,
@@ -159,6 +179,18 @@ nuget install Microsoft.Windows.CppWinRT -Version $CppWinRTVersion -OutputDirect
 $windowsAppSdkRoot = Get-PackageRoot -PackagesRoot $packagesRoot -PackageId "Microsoft.WindowsAppSDK" -Version $WindowsAppSDKVersion
 $cppWinRTRoot = Get-PackageRoot -PackagesRoot $packagesRoot -PackageId "Microsoft.Windows.CppWinRT" -Version $CppWinRTVersion
 
+$windowsAppSdkPackageRoots = @(Get-ChildItem -LiteralPath $packagesRoot -Directory |
+    Where-Object { $_.Name -like "Microsoft.WindowsAppSDK*" } |
+    Sort-Object Name |
+    ForEach-Object { $_.FullName })
+if ($windowsAppSdkPackageRoots -notcontains $windowsAppSdkRoot) {
+    $windowsAppSdkPackageRoots = @($windowsAppSdkRoot) + $windowsAppSdkPackageRoots
+}
+
+foreach ($root in $windowsAppSdkPackageRoots) {
+    Write-Host "Windows App SDK package root: $root"
+}
+
 $cppwinrt = Get-ChildItem -LiteralPath $cppWinRTRoot -Recurse -File -Filter cppwinrt.exe | Select-Object -First 1
 if (!$cppwinrt) {
     throw "cppwinrt.exe was not found under '$cppWinRTRoot'."
@@ -177,11 +209,12 @@ else {
 }
 
 Write-Host "Finding Windows App SDK metadata..."
-$winmdFiles = @(Get-ChildItem -LiteralPath $windowsAppSdkRoot -Recurse -File -Filter *.winmd |
+$winmdFiles = @($windowsAppSdkPackageRoots |
+    ForEach-Object { Get-ChildItem -LiteralPath $_ -Recurse -File -Filter *.winmd } |
     Where-Object { $_.FullName -notmatch '\\ref\\net' } |
-    Sort-Object FullName)
+    Sort-Object FullName -Unique)
 if (!$winmdFiles) {
-    throw "No .winmd files were found under '$windowsAppSdkRoot'."
+    throw "No .winmd files were found under any Windows App SDK package root."
 }
 
 $winmdDirs = @($winmdFiles |
@@ -217,8 +250,8 @@ if (!(Test-Path (Join-Path $includeRoot "winrt\base.h"))) {
 }
 
 Write-Host "Copying Windows App SDK public headers..."
-Copy-FirstRequiredFile -Root $windowsAppSdkRoot -Filter "MddBootstrap.h" -Destination $includeRoot
-Copy-FirstRequiredFile -Root $windowsAppSdkRoot -Filter "WindowsAppSDK-VersionInfo.h" -Destination $includeRoot
+Copy-FirstRequiredFileFromRoots -Roots $windowsAppSdkPackageRoots -Filter "MddBootstrap.h" -Destination $includeRoot
+Copy-FirstRequiredFileFromRoots -Roots $windowsAppSdkPackageRoots -Filter "WindowsAppSDK-VersionInfo.h" -Destination $includeRoot
 
 $additionalHeaders = @(
     "MddBootstrapTest.h",
@@ -226,7 +259,8 @@ $additionalHeaders = @(
     "Microsoft.WindowsAppRuntime.Release.Net.dll.h"
 )
 foreach ($header in $additionalHeaders) {
-    Get-ChildItem -LiteralPath $windowsAppSdkRoot -Recurse -File -Filter $header |
+    $windowsAppSdkPackageRoots |
+        ForEach-Object { Get-ChildItem -LiteralPath $_ -Recurse -File -Filter $header } |
         Select-Object -First 1 |
         ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $includeRoot -Force }
 }
@@ -236,9 +270,11 @@ foreach ($arch in @("x64", "arm64", "x86")) {
     New-Item -ItemType Directory -Force -Path (Join-Path $sdkRoot "lib\$arch") | Out-Null
 }
 
-$bootstrapLibs = @(Get-ChildItem -LiteralPath $windowsAppSdkRoot -Recurse -File -Filter "Microsoft.WindowsAppRuntime.Bootstrap.lib")
+$bootstrapLibs = @($windowsAppSdkPackageRoots |
+    ForEach-Object { Get-ChildItem -LiteralPath $_ -Recurse -File -Filter "Microsoft.WindowsAppRuntime.Bootstrap.lib" } |
+    Sort-Object FullName -Unique)
 if (!$bootstrapLibs) {
-    throw "Microsoft.WindowsAppRuntime.Bootstrap.lib was not found under '$windowsAppSdkRoot'."
+    throw "Microsoft.WindowsAppRuntime.Bootstrap.lib was not found under any Windows App SDK package root."
 }
 foreach ($lib in $bootstrapLibs) {
     Copy-ArchitectureFile -File $lib -SdkRoot $sdkRoot -SubDirectory "lib"
@@ -250,7 +286,8 @@ if ($IncludeRuntimeDlls) {
         New-Item -ItemType Directory -Force -Path (Join-Path $sdkRoot "bin\$arch") | Out-Null
     }
 
-    Get-ChildItem -LiteralPath $windowsAppSdkRoot -Recurse -File -Filter "Microsoft.WindowsAppRuntime.Bootstrap.dll" |
+    $windowsAppSdkPackageRoots |
+        ForEach-Object { Get-ChildItem -LiteralPath $_ -Recurse -File -Filter "Microsoft.WindowsAppRuntime.Bootstrap.dll" } |
         ForEach-Object { Copy-ArchitectureFile -File $_ -SdkRoot $sdkRoot -SubDirectory "bin" }
 }
 
