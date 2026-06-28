@@ -225,7 +225,21 @@ if (!$winmdFiles) {
     throw "No .winmd files were found under any Windows App SDK package root."
 }
 
+$dependencyWinmdFiles = @(Get-ChildItem -LiteralPath $packagesRoot -Directory |
+    Where-Object {
+        $_.Name -notlike "Microsoft.WindowsAppSDK*" -and
+        $_.Name -notlike "Microsoft.Windows.CppWinRT*" -and
+        $_.Name -notlike "Microsoft.Windows.SDK.BuildTools*"
+    } |
+    ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Recurse -File -Filter *.winmd } |
+    Where-Object { $_.FullName -notmatch '\\ref\\net' } |
+    Sort-Object FullName -Unique)
+
 $winmdDirs = @($winmdFiles |
+    ForEach-Object { $_.Directory.FullName } |
+    Sort-Object -Unique)
+
+$dependencyWinmdDirs = @($dependencyWinmdFiles |
     ForEach-Object { $_.Directory.FullName } |
     Sort-Object -Unique)
 
@@ -234,10 +248,11 @@ if ($windowsSdkWinmdDirectories) {
     foreach ($dir in $windowsSdkWinmdDirectories) {
         Write-Host "Windows SDK metadata directory: $dir"
     }
-    $winmdDirs = $windowsSdkWinmdDirectories + $winmdDirs
+    $winmdDirs = $windowsSdkWinmdDirectories + $dependencyWinmdDirs + $winmdDirs
 }
 else {
     Write-Warning "Windows SDK Windows.winmd was not found in Windows Kits or NuGet SDK build tools. cppwinrt.exe may fail if Windows metadata cannot be resolved implicitly."
+    $winmdDirs = $dependencyWinmdDirs + $winmdDirs
 }
 
 foreach ($dir in $winmdDirs) {
@@ -304,6 +319,12 @@ if ($IncludeRuntimeDlls) {
 Write-Host "Copying metadata..."
 $seenWinmdNames = @{}
 foreach ($winmd in $winmdFiles) {
+    if (!$seenWinmdNames.ContainsKey($winmd.Name)) {
+        Copy-Item -LiteralPath $winmd.FullName -Destination $winmdOut -Force
+        $seenWinmdNames[$winmd.Name] = $winmd.FullName
+    }
+}
+foreach ($winmd in $dependencyWinmdFiles) {
     if (!$seenWinmdNames.ContainsKey($winmd.Name)) {
         Copy-Item -LiteralPath $winmd.FullName -Destination $winmdOut -Force
         $seenWinmdNames[$winmd.Name] = $winmd.FullName
