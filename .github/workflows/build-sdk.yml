@@ -48,6 +48,45 @@ jobs:
           path: ${{ steps.build.outputs.zip_path }}
           if-no-files-found: error
 
+      - name: Publish nightly release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZIP_PATH: ${{ steps.build.outputs.zip_path }}
+          ZIP_NAME: ${{ steps.build.outputs.zip_name }}
+        run: |
+          $tag = "nightly"
+          $title = "Nightly"
+          $notes = @"
+          Latest nightly WinUI 3 SDK snapshot.
+
+          Windows App SDK: $env:WINDOWS_APP_SDK_VERSION
+          C++/WinRT: $env:CPPWINRT_VERSION
+          Commit: $env:GITHUB_SHA
+          "@
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag $env:ZIP_PATH `
+              --target $env:GITHUB_SHA `
+              --title $title `
+              --notes $notes `
+              --prerelease
+          }
+          else {
+            gh release edit $tag `
+              --title $title `
+              --notes $notes `
+              --prerelease
+
+            $assets = gh release view $tag --json assets --jq '.assets[].name'
+            foreach ($asset in $assets) {
+              gh release delete-asset $tag $asset --yes
+            }
+
+            gh release upload $tag $env:ZIP_PATH --clobber
+          }
+
       - name: Attach artifact to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
