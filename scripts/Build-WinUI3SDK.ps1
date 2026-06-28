@@ -169,10 +169,12 @@ New-Item -ItemType Directory -Force -Path $includeRoot, $winmdOut, $cmakeOut | O
 Write-Host "Copying baseline C++/WinRT headers..."
 $cppWinRTIncludeDirs = @(Get-ChildItem -LiteralPath $cppWinRTRoot -Recurse -Directory |
     Where-Object { Test-Path (Join-Path $_.FullName "winrt\base.h") })
-if (!$cppWinRTIncludeDirs) {
-    throw "Could not find C++/WinRT include directory containing winrt/base.h."
+if ($cppWinRTIncludeDirs) {
+    Copy-Item -LiteralPath (Join-Path $cppWinRTIncludeDirs[0].FullName "winrt") -Destination $includeRoot -Recurse -Force
 }
-Copy-Item -LiteralPath (Join-Path $cppWinRTIncludeDirs[0].FullName "winrt") -Destination $includeRoot -Recurse -Force
+else {
+    Write-Warning "Could not find a packaged C++/WinRT include directory containing winrt/base.h. cppwinrt.exe is expected to generate the baseline headers."
+}
 
 Write-Host "Finding Windows App SDK metadata..."
 $winmdFiles = @(Get-ChildItem -LiteralPath $windowsAppSdkRoot -Recurse -File -Filter *.winmd |
@@ -208,6 +210,10 @@ $cppwinrtArgs += @("-output", $includeRoot)
 & $cppwinrt.FullName @cppwinrtArgs
 if ($LASTEXITCODE -ne 0) {
     throw "cppwinrt.exe failed with exit code $LASTEXITCODE."
+}
+
+if (!(Test-Path (Join-Path $includeRoot "winrt\base.h"))) {
+    throw "C++/WinRT generation completed, but winrt/base.h was not found in '$includeRoot'."
 }
 
 Write-Host "Copying Windows App SDK public headers..."
