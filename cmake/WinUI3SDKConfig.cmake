@@ -1,0 +1,47 @@
+# WinUI3SDKConfig.cmake
+# Imported target for the generated WinUI 3 / Windows App SDK snapshot.
+
+if(TARGET WinUI3SDK::WinUI3SDK)
+    return()
+endif()
+
+add_library(WinUI3SDK::WinUI3SDK INTERFACE IMPORTED)
+
+get_filename_component(_WINUI3SDK_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
+
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|arm64|aarch64|AARCH64")
+    set(_WINUI3SDK_ARCH arm64)
+elseif(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(_WINUI3SDK_ARCH x64)
+else()
+    set(_WINUI3SDK_ARCH x86)
+endif()
+
+set(_WINUI3SDK_BOOTSTRAP_LIB "${_WINUI3SDK_ROOT}/lib/${_WINUI3SDK_ARCH}/Microsoft.WindowsAppRuntime.Bootstrap.lib")
+if(NOT EXISTS "${_WINUI3SDK_BOOTSTRAP_LIB}")
+    message(FATAL_ERROR "WinUI3SDK bootstrap import library not found: ${_WINUI3SDK_BOOTSTRAP_LIB}")
+endif()
+
+target_include_directories(WinUI3SDK::WinUI3SDK INTERFACE
+    "${_WINUI3SDK_ROOT}/include"
+)
+
+target_link_libraries(WinUI3SDK::WinUI3SDK INTERFACE
+    windowsapp
+    runtimeobject
+    ole32
+    shell32
+    shcore
+    "${_WINUI3SDK_BOOTSTRAP_LIB}"
+)
+
+target_compile_definitions(WinUI3SDK::WinUI3SDK INTERFACE
+    UNICODE
+    _UNICODE
+    NOMINMAX
+    WIN32_LEAN_AND_MEAN
+)
+
+unset(_WINUI3SDK_BOOTSTRAP_LIB)
+unset(_WINUI3SDK_ARCH)
+unset(_WINUI3SDK_ROOT)

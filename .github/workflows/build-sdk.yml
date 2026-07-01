@@ -1,0 +1,95 @@
+name: Build WinUI3 SDK snapshot
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - "**"
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  WINDOWS_APP_SDK_VERSION: 2.2.0
+  CPPWINRT_VERSION: 3.0.260520.1
+
+jobs:
+  build:
+    runs-on: windows-2025
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install NuGet
+        uses: NuGet/setup-nuget@v2
+
+      - name: Build SDK snapshot
+        id: build
+        shell: pwsh
+        run: |
+          .\scripts\Build-WinUI3SDK.ps1 `
+            -WindowsAppSDKVersion $env:WINDOWS_APP_SDK_VERSION `
+            -CppWinRTVersion $env:CPPWINRT_VERSION `
+            -Configuration Release `
+            -IncludeRuntimeDlls
+
+          $zip = Get-ChildItem artifacts -Filter *.zip | Select-Object -First 1
+          if (!$zip) { throw "No zip artifact was produced." }
+          "zip_path=$($zip.FullName)" >> $env:GITHUB_OUTPUT
+          "zip_name=$($zip.Name)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build.outputs.zip_name }}
+          path: ${{ steps.build.outputs.zip_path }}
+          if-no-files-found: error
+
+      - name: Publish nightly release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZIP_PATH: ${{ steps.build.outputs.zip_path }}
+          ZIP_NAME: ${{ steps.build.outputs.zip_name }}
+        run: |
+          $tag = "nightly"
+          $title = "Nightly"
+          $notes = @"
+          Latest nightly WinUI 3 SDK snapshot.
+
+          Windows App SDK: $env:WINDOWS_APP_SDK_VERSION
+          C++/WinRT: $env:CPPWINRT_VERSION
+          Commit: $env:GITHUB_SHA
+          "@
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag $env:ZIP_PATH `
+              --target $env:GITHUB_SHA `
+              --title $title `
+              --notes $notes `
+              --prerelease
+          }
+          else {
+            gh release edit $tag `
+              --title $title `
+              --notes $notes `
+              --prerelease
+
+            $assets = gh release view $tag --json assets --jq '.assets[].name'
+            foreach ($asset in $assets) {
+              gh release delete-asset $tag $asset --yes
+            }
+
+            gh release upload $tag $env:ZIP_PATH --clobber
+          }
+
+      - name: Attach artifact to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.build.outputs.zip_path }}
+          generate_release_notes: true

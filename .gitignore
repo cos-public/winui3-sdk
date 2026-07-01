@@ -1,0 +1,8 @@
+packages/
+out/
+artifacts/
+*.zip
+*.nupkg
+.vs/
+.vscode/
+build/
