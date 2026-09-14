@@ -58,11 +58,11 @@ Package versions are pinned in `.github/workflows/build-sdk.yml`:
 
 ```yaml
 env:
-  WINDOWS_APP_SDK_VERSION: 2.2.0
-  CPPWINRT_VERSION: 3.0.260520.1
+  WINDOWS_APP_SDK_VERSION: 2.4.0
+  CPPWINRT_VERSION: 3.0.260818.1
 ```
 
-The workflow runs on every push. To build a new package version, edit those two values, commit, and push. The action will create and upload the zip artifact.
+The workflow runs on every branch push and can also be triggered manually. To build a new package version, edit those two values, commit, and push. Builds on `master` upload the versioned ZIP directly to the `nightly` GitHub Release, then remove previous SDK ZIPs after confirming the new asset exists. GitHub Actions artifact storage is not used.
 
 Tag pushes matching `v*` also attach the zip to a GitHub Release.
 
@@ -241,7 +241,7 @@ To update package versions:
      WINDOWS_APP_SDK_VERSION: <windows-app-sdk-version>
      CPPWINRT_VERSION: <cppwinrt-version>
    ```
-4. Commit and push. The workflow runs on push and uploads the package zip.
+4. Commit and push to `master`. The workflow builds and uploads the package ZIP directly to the `nightly` release, then removes previous SDK ZIPs.
 5. Inspect the produced artifact layout, especially:
    - `include/winrt/`
    - `include/MddBootstrap.h`

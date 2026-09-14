@@ -11,9 +11,13 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
-  WINDOWS_APP_SDK_VERSION: 2.2.0
-  CPPWINRT_VERSION: 3.0.260520.1
+  WINDOWS_APP_SDK_VERSION: 2.4.0
+  CPPWINRT_VERSION: 3.0.260818.1
 
 jobs:
   build:
@@ -36,55 +40,47 @@ jobs:
             -Configuration Release `
             -IncludeRuntimeDlls
 
-          $zip = Get-ChildItem artifacts -Filter *.zip | Select-Object -First 1
-          if (!$zip) { throw "No zip artifact was produced." }
+          $zipName = "winui3-sdk-$env:WINDOWS_APP_SDK_VERSION-cppwinrt-$env:CPPWINRT_VERSION.zip"
+          $zip = Get-Item -LiteralPath (Join-Path artifacts $zipName) -ErrorAction Stop
           "zip_path=$($zip.FullName)" >> $env:GITHUB_OUTPUT
           "zip_name=$($zip.Name)" >> $env:GITHUB_OUTPUT
 
-      - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.build.outputs.zip_name }}
-          path: ${{ steps.build.outputs.zip_path }}
-          if-no-files-found: error
-
       - name: Publish nightly release
+        if: github.ref == 'refs/heads/master' && success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly
+          prerelease: true
+          generate_release_notes: false
+          target_commitish: ${{ github.sha }}
+          body: |
+            Latest nightly WinUI 3 SDK snapshot.
+
+            Windows App SDK: ${{ env.WINDOWS_APP_SDK_VERSION }}
+            C++/WinRT: ${{ env.CPPWINRT_VERSION }}
+            Commit: ${{ github.sha }}
+          files: ${{ steps.build.outputs.zip_path }}
+          fail_on_unmatched_files: true
+
+      - name: Remove previous nightly SDK assets
+        if: github.ref == 'refs/heads/master' && success()
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          ZIP_PATH: ${{ steps.build.outputs.zip_path }}
           ZIP_NAME: ${{ steps.build.outputs.zip_name }}
         run: |
-          $tag = "nightly"
-          $title = "Nightly"
-          $notes = @"
-          Latest nightly WinUI 3 SDK snapshot.
-
-          Windows App SDK: $env:WINDOWS_APP_SDK_VERSION
-          C++/WinRT: $env:CPPWINRT_VERSION
-          Commit: $env:GITHUB_SHA
-          "@
-
-          gh release view $tag *> $null
-          if ($LASTEXITCODE -ne 0) {
-            gh release create $tag $env:ZIP_PATH `
-              --target $env:GITHUB_SHA `
-              --title $title `
-              --notes $notes `
-              --prerelease
+          $releaseJson = gh release view nightly --json assets
+          if ($LASTEXITCODE -ne 0) { throw "Failed to list nightly release assets." }
+          $assets = ($releaseJson | ConvertFrom-Json).assets
+          if ($env:ZIP_NAME -notin $assets.name) {
+            throw "New SDK ZIP is missing from nightly; refusing to remove previous versions."
           }
-          else {
-            gh release edit $tag `
-              --title $title `
-              --notes $notes `
-              --prerelease
-
-            $assets = gh release view $tag --json assets --jq '.assets[].name'
-            foreach ($asset in $assets) {
-              gh release delete-asset $tag $asset --yes
+          foreach ($asset in $assets) {
+            if ($asset.name -like "winui3-sdk-*.zip" -and $asset.name -ne $env:ZIP_NAME) {
+              gh release delete-asset nightly $asset.name --yes
+              if ($LASTEXITCODE -ne 0) { throw "Failed to delete nightly asset '$($asset.name)'." }
             }
-
-            gh release upload $tag $env:ZIP_PATH --clobber
           }
 
       - name: Attach artifact to GitHub Release
